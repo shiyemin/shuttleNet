@@ -1,0 +1,9 @@
+*.txt
+*.pyc
+deployment/*.pyc
+nets/*.pyc
+ops/*.pyc
+ops/*.o
+ops/*.so
+preprocessing/*.pyc
+models
