@@ -61,8 +61,6 @@ def adjust_max(global_step, start, stop, start_value, stop_value, name=None):
     with ops.name_scope(name, "AdjustMax",
                         [global_step, start, stop, name]) as name:
         global_step = ops.convert_to_tensor(global_step)
-        # Avoid explicit conversion to x's dtype. This could result in faulty
-        # comparisons, for example if floats are converted to integers.
         start = tf.convert_to_tensor(start, dtype=global_step.dtype)
         stop = tf.convert_to_tensor(stop, dtype=global_step.dtype)
         start_value = tf.convert_to_tensor(start_value, dtype=tf.float32)
