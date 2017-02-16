@@ -73,9 +73,6 @@ def adjust_max(global_step, start, stop, start_value, stop_value, name=None):
         pred_fn_pairs[(global_step > start) & (global_step <= stop)] = lambda: tf.train.polynomial_decay(
                                     start_value, global_step-start, stop-start,
                                     end_learning_rate=stop_value, power=1.0, cycle=False)
-
-        # The default isn't needed here because our conditions are mutually
-        # exclusive and exhaustive, but tf.case requires it.
         default = lambda: stop_value
         return tf.case(pred_fn_pairs, default, exclusive=True)
 
