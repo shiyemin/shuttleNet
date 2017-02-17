@@ -31,16 +31,11 @@ import tensorflow as tf
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import math_ops
-from tensorflow.python.ops.math_ops import sigmoid
-from tensorflow.python.ops.math_ops import tanh
-from tensorflow.python.ops.rnn_cell_impl import _RNNCell as RNNCell
 from tensorflow.contrib.framework.python.ops import add_arg_scope
 from tensorflow.contrib.layers.python.layers import utils
 from tensorflow.python.ops import nn
 from tensorflow.python.training import moving_averages
 from tensorflow.python.framework import ops
-from tensorflow.python.platform import tf_logging as logging
-from tensorflow.python.util import nest
 from tensorflow.contrib.framework.python.ops import variables
 
 DATA_FORMAT_NCHW = 'NCHW'
@@ -57,22 +52,25 @@ def l2_norm(inputs, scope):
         return tf.nn.l2_normalize(inputs, dim)
 
 
-def adjust_max(global_step, start, stop, start_value, stop_value, name=None):
+def adjust_max(start, stop, start_value, stop_value, name=None):
     with ops.name_scope(name, "AdjustMax",
-                        [global_step, start, stop, name]) as name:
-        global_step = ops.convert_to_tensor(global_step)
-        start = tf.convert_to_tensor(start, dtype=global_step.dtype)
-        stop = tf.convert_to_tensor(stop, dtype=global_step.dtype)
-        start_value = tf.convert_to_tensor(start_value, dtype=tf.float32)
-        stop_value = tf.convert_to_tensor(stop_value, dtype=tf.float32)
+                        [start, stop, name]) as name:
+        global_step = tf.train.get_global_step()
+        if global_step is not None:
+            start = tf.convert_to_tensor(start, dtype=global_step.dtype)
+            stop = tf.convert_to_tensor(stop, dtype=global_step.dtype)
+            start_value = tf.convert_to_tensor(start_value, dtype=tf.float32)
+            stop_value = tf.convert_to_tensor(stop_value, dtype=tf.float32)
 
-        pred_fn_pairs = {}
-        pred_fn_pairs[global_step <= start] = lambda: start_value
-        pred_fn_pairs[(global_step > start) & (global_step <= stop)] = lambda: tf.train.polynomial_decay(
-                                    start_value, global_step-start, stop-start,
-                                    end_learning_rate=stop_value, power=1.0, cycle=False)
-        default = lambda: stop_value
-        return tf.case(pred_fn_pairs, default, exclusive=True)
+            pred_fn_pairs = {}
+            pred_fn_pairs[global_step <= start] = lambda: start_value
+            pred_fn_pairs[(global_step > start) & (global_step <= stop)] = lambda: tf.train.polynomial_decay(
+                                        start_value, global_step-start, stop-start,
+                                        end_learning_rate=stop_value, power=1.0, cycle=False)
+            default = lambda: stop_value
+            return tf.case(pred_fn_pairs, default, exclusive=True)
+        else:
+            return None
 
 
 @add_arg_scope
