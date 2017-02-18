@@ -57,8 +57,8 @@ def adjust_max(start, stop, start_value, stop_value, name=None):
                         [start, stop, name]) as name:
         global_step = tf.train.get_global_step()
         if global_step is not None:
-            start = tf.convert_to_tensor(start, dtype=global_step.dtype)
-            stop = tf.convert_to_tensor(stop, dtype=global_step.dtype)
+            start = tf.convert_to_tensor(start, dtype=tf.int64)
+            stop = tf.convert_to_tensor(stop, dtype=tf.int64)
             start_value = tf.convert_to_tensor(start_value, dtype=tf.float32)
             stop_value = tf.convert_to_tensor(stop_value, dtype=tf.float32)
 
