@@ -93,8 +93,8 @@ This code was written by Yemin Shi.
 
 You can also read more technical details in our [paper](https://arxiv.org/abs/1611.05216). If you use our code for research, please cite this paper as follows:
 
-    @article{shi2016shuttlenet,
-      title={shuttleNet: A biologically-inspired RNN with loop connection and parameter sharing},
+    @article{shi2016learning,
+      title={Learning long-term dependencies for action recognition with a biologically-inspired deep network},
       author={Shi, Yemin and Tian, Yonghong and Wang, Yaowei and Huang, Tiejun},
       journal={arXiv preprint arXiv:1611.05216},
       year={2016}
