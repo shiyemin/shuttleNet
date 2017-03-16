@@ -73,10 +73,10 @@ def _mean_image_subtraction(image, means):
   if len(means) != num_channels:
     raise ValueError('len(means) must match the number of channels')
 
-  channels = tf.split_v(image, num_channels, 2)
+  channels = tf.split(image, num_channels, 2)
   for i in range(num_channels):
     channels[i] -= means[i]
-  return tf.concat_v2(channels, 2)
+  return tf.concat(channels, 2)
 
 
 def distort_color(image, color_ordering=0, fast_mode=True, scope=None):

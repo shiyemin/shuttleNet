@@ -29,12 +29,18 @@ from __future__ import print_function
 import tensorflow as tf
 from tensorflow.python.ops.math_ops import sigmoid
 from tensorflow.python.ops.math_ops import tanh
+from tensorflow.contrib.rnn.python.ops import core_rnn_cell_impl
 
 import numpy as np
+from ops import ops
 
-RNNCell = tf.nn.rnn_cell.RNNCell
-_linear = tf.nn.rnn_cell._linear
-LSTMStateTuple = tf.nn.rnn_cell.LSTMStateTuple
+try:
+    xrange
+except NameError:
+    xrange = range
+_linear = ops._linear
+RNNCell = tf.contrib.rnn.RNNCell
+LSTMStateTuple = tf.contrib.rnn.LSTMStateTuple
 
 
 def shuttleNet(inputs, n_steps, num_mem, mem_dim,
@@ -51,29 +57,36 @@ def shuttleNet(inputs, n_steps, num_mem, mem_dim,
             inputs = tf.reshape(inputs, [input_shape[0].value, -1])
             batch_size = int(input_shape[0].value / n_steps)
             if echocell == "BASIC":
-                cell = tf.nn.rnn_cell.BasicLSTMCell(mem_dim, forget_bias=1.0,
+                cell = tf.contrib.rnn.BasicLSTMCell(mem_dim, forget_bias=1.0,
                                                     state_is_tuple=False,
                                                     activation=activation)
             elif echocell == "LSTM":
-                cell = tf.nn.rnn_cell.LSTMCell(mem_dim, state_is_tuple=False,
+                cell = tf.contrib.rnn.LSTMCell(mem_dim, state_is_tuple=False,
                                                activation=activation)
             elif echocell == "GRU":
-                cell = tf.nn.rnn_cell.GRUCell(mem_dim, activation=activation)
-            else:
+                cell = ops.GRUCell(mem_dim, activation=activation)
+            elif echocell == "tfGRU":
+                cell = tf.contrib.rnn.GRUCell(mem_dim, activation=activation)
+            elif echocell == "GRUBlock":
+                cell = tf.contrib.rnn.GRUBlockCell(mem_dim)
+            elif echocell == "MEM":
                 cell = None
+            else:
+                raise NotImplementedError("echocell %s is not supported."%(echocell))
             en_cell = ENCell(batch_size, num_mem, num_round, 1,
-                             cell=cell)
+                             cell=cell,
+                             echocell=echocell)
         else:
             raise ValueError("lstm_type %s is not in lstm and conv."%lstm_type)
         initial_state = None
 
         # Split data because rnn cell needs a list of inputs for the RNN inner loop
-        inputs = tf.split_v(inputs, int(n_steps), int(0)) # n_steps * (batch_size, n_hidden)
+        inputs = tf.split(inputs, int(n_steps), int(0)) # n_steps * (batch_size, n_hidden)
 
         # Get lstm cell output
-        outputs, states = tf.nn.rnn(en_cell, inputs, initial_state=initial_state,
+        outputs, states = tf.contrib.rnn.static_rnn(en_cell, inputs, initial_state=initial_state,
                                     dtype=tf.float32, sequence_length=num_frames, scope=scope)
-        outputs = tf.concat_v2(outputs, 0)
+        outputs = tf.concat(outputs, 0)
         return outputs
 
 
@@ -170,19 +183,19 @@ class MemGrid(RNNCell):
         with tf.variable_scope(scope or type(self).__name__):  # "MemGrid"
             with tf.variable_scope("Gates"):  # Reset gate and update gate.
                 # We start with bias of 1.0 to not reset and not update.
-                r, u = tf.split_v(self.unbalance_linear([inputs, self._memory],
+                r, u = tf.split(self.unbalance_linear([inputs, self._memory],
                                                     2 * self._mem_dim, True, 1.0), 2, 2)
                 r, u = sigmoid(r), sigmoid(u)
             with tf.variable_scope("Candidate"):
                 c = self._activation(self.unbalance_linear([inputs, r * self._memory],
                                             self._mem_dim, True))
             # Decide which line to write: line weights
-            l = att_weight(inputs, tf.concat_v2([c, self._memory], 2), self._mem_dim, scope="Line_weights")
+            l = att_weight(inputs, tf.concat([c, self._memory], 2), self.echocell, scope="Line_weights")
             l = tf.reshape(l, [self._batch_size, self._mem_size, 1])
             t_memory = u * self._memory + (1 - u) * c
             self._memory = self._memory * (1 - l) + t_memory * l
 
-            #  hl = att_weight(inputs, self._memory, self._mem_dim, scope="hidden_lw")
+            #  hl = att_weight(inputs, self._memory, echocell, scope="hidden_lw")
             #  hl = tf.reshape(hl, [self._batch_size, self._mem_size, 1])
             #  output = tf.reduce_sum(hl * self._memory, 1)
             output = tf.reduce_sum(l * self._memory, 1)
@@ -196,6 +209,7 @@ class ENCell(RNNCell):
 
     def __init__(self, batch_size, num_mem, num_round, input_offset,
                  cell=None,
+                 echocell=None,
                  mem_size=2,
                  mem_dim=1024,
                  activation=tanh,
@@ -220,6 +234,7 @@ class ENCell(RNNCell):
         else:
             self.check = False
             self._mem_cells = [cell] * num_mem
+        self.echocell = echocell
 
     @property
     def state_size(self):
@@ -235,7 +250,7 @@ class ENCell(RNNCell):
                                       the input dimension[%d] should be equal to \
                                       mem_dim[%d]."%(inputs.get_shape()[1].value, self._mem_dim))
         """ with nunits (EN) cells."""
-        states = tf.split_v(state, self._num_mem * self._num_round, 1, name='state_split')
+        states = tf.split(state, self._num_mem * self._num_round, 1, name='state_split')
         with tf.variable_scope(scope or type(self).__name__):  # "ENCell"
             prev_outputs = [inputs] * self._num_mem
             #  final_outputs = []
@@ -258,19 +273,20 @@ class ENCell(RNNCell):
             if len(final_outputs) > 1:
                 for i in xrange(len(final_outputs)):
                     final_outputs[i] = tf.reshape(final_outputs[i], [self._batch_size, 1, self.output_size])
-                outputs_concat = tf.concat_v2(final_outputs, 1)
-                ow = att_weight(inputs, outputs_concat, scope="ow")
+                outputs_concat = tf.concat(final_outputs, 1)
+                ow = att_weight(inputs, outputs_concat, self.echocell, scope="ow")
                 ow = tf.reshape(ow, [self._batch_size, len(final_outputs), 1])
                 output = tf.reduce_sum(ow * outputs_concat, 1)
                 output = tf.reshape(output, [self._batch_size, self.output_size])
             else:
                 output = final_outputs[0]
-            state = tf.concat_v2(states, 1)
+            state = tf.concat(states, 1)
             return output, state
 
 
 def att_weight(decoder_inputs, attention_states,
-                       dtype=tf.float32, scope=None):
+               echocell=None,
+               scope=None):
     """
     Args:
         decoder_inputs: A list of 2D Tensors [batch_size x cell.input_size].
@@ -301,7 +317,10 @@ def att_weight(decoder_inputs, attention_states,
 
         """Put attention masks on hidden using hidden_features and decoder_inputs."""
         with tf.variable_scope("Attention"):
-            y = _linear(decoder_inputs, attention_vec_size, True)
+            if echocell == 'tfGRU':
+                y = core_rnn_cell_impl._linear(decoder_inputs, attention_vec_size, True)
+            else:
+                y = _linear(decoder_inputs, attention_vec_size, True)
             y = tf.reshape(y, [-1, 1, 1, attention_vec_size])
             # Attention mask is a softmax of v^T * tanh(...).
             s = tf.reduce_sum(
@@ -312,33 +331,32 @@ def att_weight(decoder_inputs, attention_states,
             return a
 
 
-
 def lstm(inputs, n_steps, num_units,
-        is_training,
+        is_training=True,
         num_frames=None,
-        lstm_type="MIGRU",
+        lstm_type="GRU",
         keep_prob=1.0,
         scope=None):
     with tf.variable_scope(scope, 'LN_LSTM', [inputs]):
         input_shape = inputs.get_shape()
         inputs = tf.reshape(inputs, [input_shape[0].value, -1])
         if lstm_type == "GRU":
-            lstm_cell = tf.nn.rnn_cell.GRUCell(num_units)
+            lstm_cell = tf.contrib.rnn.GRUCell(num_units)
         elif lstm_type == "BASIC":
-            lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(num_units)
+            lstm_cell = tf.contrib.rnn.BasicLSTMCell(num_units)
         elif lstm_type == "LSTM":
-            lstm_cell = tf.nn.rnn_cell.LSTMCell(num_units)
+            lstm_cell = tf.contrib.rnn.LSTMCell(num_units)
         else:
             raise ValueError("lstm_type %s is not in lstm and conv."%lstm_type)
         if is_training and keep_prob < 1:
-            lstm_cell = tf.nn.rnn_cell.DropoutWrapper(lstm_cell, output_keep_prob=keep_prob)
+            lstm_cell = tf.contrib.rnn.DropoutWrapper(lstm_cell, output_keep_prob=keep_prob)
         initial_state = None
 
         # Split data because rnn cell needs a list of inputs for the RNN inner loop
-        inputs = tf.split_v(inputs, int(n_steps), int(0)) # n_steps * (batch_size, n_hidden)
+        inputs = tf.split(inputs, int(n_steps), int(0)) # n_steps * (batch_size, n_hidden)
 
         # Get lstm cell output
-        outputs, states = tf.nn.rnn(lstm_cell, inputs, initial_state=initial_state,
+        outputs, states = tf.contrib.rnn.static_rnn(lstm_cell, inputs, initial_state=initial_state,
                                     dtype=tf.float32, sequence_length=num_frames, scope=scope)
-        outputs = tf.concat_v2(outputs, 0)
+        outputs = tf.concat(outputs, 0)
         return outputs

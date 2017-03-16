@@ -41,7 +41,7 @@ slim = tf.contrib.slim
 
 tf.app.flags.DEFINE_string(
     'mode', 'train',
-    'Run mode. train or test.')
+    'Run mode. train or test or extract.')
 
 tf.app.flags.DEFINE_string(
     'master', '', 'The address of the TensorFlow master to use.')
@@ -153,6 +153,10 @@ tf.app.flags.DEFINE_string(
 
 tf.app.flags.DEFINE_float('learning_rate', 0.01, 'Initial learning rate.')
 
+tf.app.flags.DEFINE_string(
+    'learning_rate_steps',
+    '10', 'Setting the exact learning rate steps when FLAGS.learning_rate is set as 0.')
+
 tf.app.flags.DEFINE_float(
     'end_learning_rate', 0.0001,
     'The minimal end learning rate used by a polynomial decay learning rate.')
@@ -235,6 +239,16 @@ tf.app.flags.DEFINE_string(
     'feature_dir', '/tmp/tfmodel/',
     'Directory where features are written to.')
 
+tf.app.flags.DEFINE_string(
+    'rnn', 'shuttleNet', 'The list of the dataset to load.')
+
+tf.app.flags.DEFINE_string(
+    'echocell', 'GRUBlock', 'The list of the dataset to load.')
+
+tf.app.flags.DEFINE_integer(
+    'num_rnn', 1,
+    'The Number of rnn layers.')
+
 #####################
 # Video Flags #
 #####################
@@ -272,6 +286,11 @@ tf.app.flags.DEFINE_boolean(
 
 tf.app.flags.DEFINE_string(
     'checkpoint_exclude_scopes', None,
+    'Comma-separated list of scopes of variables to exclude when restoring '
+    'from a checkpoint.')
+
+tf.app.flags.DEFINE_string(
+    'checkpoint_exclude_end_scopes', None,
     'Comma-separated list of scopes of variables to exclude when restoring '
     'from a checkpoint.')
 
@@ -345,23 +364,23 @@ def train():
                 assert load_batch_size % FLAGS.n_steps == 0
                 total_video_num = int(load_batch_size / FLAGS.n_steps)
                 # Split images and labels for cnn
-                split_images = tf.split_v(images, deploy_config.num_clones, 0)
+                split_images = tf.split(images, deploy_config.num_clones, 0)
                 cnn_labels = labels
                 if FLAGS.merge_label:
                     cnn_labels = tf.reshape(cnn_labels, [1, -1, FLAGS.NUM_CLASSES])
                     cnn_labels = tf.tile(cnn_labels, [FLAGS.n_steps, 1, 1])
                     cnn_labels = tf.reshape(cnn_labels, [-1, FLAGS.NUM_CLASSES])
-                split_cnn_labels = tf.split_v(cnn_labels, deploy_config.num_clones, 0)
+                split_cnn_labels = tf.split(cnn_labels, deploy_config.num_clones, 0)
                 # Split labels for rnn
                 if not FLAGS.merge_label:
                     split_rnn_labels = tf.reshape(labels, [FLAGS.n_steps, total_video_num, FLAGS.NUM_CLASSES])
                     assert total_video_num % deploy_config.num_clones == 0
-                    split_rnn_labels = tf.split_v(split_rnn_labels, deploy_config.num_clones, 1)
+                    split_rnn_labels = tf.split(split_rnn_labels, deploy_config.num_clones, 1)
                     each_video_num = int(total_video_num / deploy_config.num_clones)
                     split_rnn_labels = [tf.reshape(label, [FLAGS.n_steps*each_video_num, FLAGS.NUM_CLASSES])
                                         for label in split_rnn_labels]
                 else:
-                    split_rnn_labels = tf.split_v(labels, deploy_config.num_clones, 0)
+                    split_rnn_labels = tf.split(labels, deploy_config.num_clones, 0)
             else:
                 batch_queue = slim.prefetch_queue.prefetch_queue(
                         [images, labels], capacity=2 * deploy_config.num_clones)
@@ -386,7 +405,7 @@ def train():
                 # Specify the loss function #
                 #############################
                 if 'AuxLogits' in end_points:
-                    tf.contrib.losses.softmax_cross_entropy(
+                    tf.losses.softmax_cross_entropy(
                             logits=end_points['AuxLogits'], onehot_labels=labels,
                             label_smoothing=FLAGS.label_smoothing, weights=0.4, scope='aux_loss')
                 return end_points
@@ -402,7 +421,7 @@ def train():
                 #############################
                 # Specify the loss function #
                 #############################
-                tf.contrib.losses.softmax_cross_entropy(
+                tf.losses.softmax_cross_entropy(
                             logits=logits, onehot_labels=labels, label_smoothing=FLAGS.label_smoothing, weights=1.0)
                 return end_points
             # Run BN part, CNN and RNN should have different labels because of the different sample order
@@ -413,12 +432,12 @@ def train():
             assert len(model_deploy.get_available_gpus()) > deploy_config.num_clones
             with tf.device(deploy_config.clone_device(0)):
                 # Concat all clones to one tensor
-                cnn_outputs = tf.concat_v2(values=cnn_outputs, axis=0)
+                cnn_outputs = tf.concat(values=cnn_outputs, axis=0)
                 output_shape = cnn_outputs.get_shape().as_list()
                 # Reshape to expose the video number dimension
                 cnn_outputs = tf.reshape(cnn_outputs, [FLAGS.n_steps, total_video_num]+output_shape[1:])
                 # Split in the video number dimension, so that each clone has an input for lstm
-                cnn_outputs = tf.split_v(cnn_outputs, deploy_config.num_clones, 1)
+                cnn_outputs = tf.split(cnn_outputs, deploy_config.num_clones, 1)
                 # Merge n_steps and video number dimension
                 cnn_outputs = [tf.reshape(output, [-1]+output_shape[1:]) for output in cnn_outputs]
             # Run RNN part on another GPU #deploy_config.num_clones
@@ -436,10 +455,10 @@ def train():
                 # Specify the loss function #
                 #############################
                 if 'AuxLogits' in end_points:
-                    tf.contrib.losses.softmax_cross_entropy(
+                    tf.losses.softmax_cross_entropy(
                             logits=end_points['AuxLogits'], onehot_labels=labels,
                             label_smoothing=FLAGS.label_smoothing, weights=0.4, scope='aux_loss')
-                tf.contrib.losses.softmax_cross_entropy(
+                tf.losses.softmax_cross_entropy(
                             logits=logits, onehot_labels=labels, label_smoothing=FLAGS.label_smoothing, weights=1.0)
                 return end_points
             clones = model_deploy.create_clones(deploy_config, clone_fn, [batch_queue])
@@ -642,11 +661,10 @@ def test():
             logits, end_points_rnn = network_fn.rnn_part(logits)
             end_points.update(end_points_rnn)
         if not FLAGS.merge_label:
-            logits = tf.split_v(logits, FLAGS.n_steps, 0)[-1]
-            test_label = tf.split_v(test_label, FLAGS.n_steps, 0)[-1]
+            logits = tf.split(logits, FLAGS.n_steps, 0)[-1]
+            test_label = tf.split(test_label, FLAGS.n_steps, 0)[-1]
         top_k_op = tf.nn.in_top_k(logits, test_label, FLAGS.top_k)
 
-        #  tf.summary.scalar('Top-%d'%(FLAGS.top_k), top_k_op)
         summary_op = tf.summary.merge_all()
         summary_writer =  tf.summary.FileWriter(FLAGS.eval_dir)
 
@@ -704,6 +722,132 @@ def test():
                     time.sleep(time_to_next_eval)
 
 
+def async_extract():
+    # Check training directory.
+    train_dir = FLAGS.train_dir
+    if not tf.gfile.IsDirectory(train_dir):
+        tf.logging.fatal("Training directory %s not found.", train_dir)
+        return
+
+    # Build the TensorFlow graph.
+    g = tf.Graph()
+    with g.as_default():
+        ####################
+        # Select the network #
+        ####################
+        network_fn = nets_factory.get_network_fn(
+                    FLAGS.model_name,
+                    num_classes=FLAGS.NUM_CLASSES,
+                    is_training=False)
+
+        #####################################
+        # Select the preprocessing function #
+        #####################################
+        preprocessing_name = FLAGS.preprocessing_name or FLAGS.model_name
+        image_preprocessing_fn = preprocessing_factory.get_preprocessing(
+                    preprocessing_name,
+                    is_training=False)
+
+        test_size, test_data, test_label, test_names = async_loader.multi_sample_video_inputs(FLAGS.dataset_list,
+                                            FLAGS.dataset_dir, FLAGS.batch_size, FLAGS.n_steps,
+                                            FLAGS.modality, FLAGS.read_stride,
+                                            FLAGS.resize_image_size, FLAGS.train_image_size,
+                                            image_preprocessing_fn,
+                                            label_from_one=(FLAGS.labels_offset>0),
+                                            sample_num=25,
+                                            length1=FLAGS.length,
+                                            merge_label=FLAGS.merge_label)
+        print("Batch size %d"%test_data.get_shape()[0].value)
+
+        batch_size_per_gpu = FLAGS.batch_size
+        global_step_tensor = slim.create_global_step()
+
+        # Calculate the gradients for each model tower.
+        predicts, end_points = network_fn(test_data)
+        if hasattr(network_fn, 'rnn_part'):
+            predicts, end_points_rnn = network_fn.rnn_part(predicts)
+            end_points.update(end_points_rnn)
+        if not FLAGS.merge_label:
+            predicts = tf.split(predicts, FLAGS.n_steps, 0)[-1]
+            test_label = tf.split(test_label, FLAGS.n_steps, 0)[-1]
+        top_k_op = tf.nn.in_top_k(predicts, test_label, FLAGS.top_k)
+
+        if FLAGS.moving_average_decay:
+            variable_averages = tf.train.ExponentialMovingAverage(
+                FLAGS.moving_average_decay, global_step_tensor)
+            variables_to_restore = variable_averages.variables_to_restore(
+                slim.get_variables())
+            variables_to_restore[global_step_tensor.op.name] = global_step_tensor
+        else:
+            variables_to_restore = slim.get_variables_to_restore()
+
+        for var in variables_to_restore:
+            print("Will restore %s"%(var.op.name))
+        saver = tf.train.Saver(variables_to_restore)
+        sv = tf.train.Supervisor(graph=g,
+                                   logdir=FLAGS.eval_dir,
+                                   summary_op=None,
+                                   summary_writer=None,
+                                   global_step=None,
+                                   saver=None)
+        g.finalize()
+
+        tf.logging.info("Starting evaluation at " + time.strftime(
+                "%Y-%m-%d-%H:%M:%S", time.localtime()))
+        model_path = tf.train.latest_checkpoint(FLAGS.train_dir)
+        if not model_path:
+            tf.logging.info("Skipping evaluation. No checkpoint found in: %s",
+                            FLAGS.train_dir)
+        else:
+            with sv.managed_session(
+                    FLAGS.master, start_standard_services=False, config=None) as sess:
+                # Load model from checkpoint.
+                tf.logging.info("Loading model from checkpoint: %s", model_path)
+                saver.restore(sess, model_path)
+                global_step = tf.train.global_step(sess, global_step_tensor.name)
+                tf.logging.info("Successfully loaded %s at global step = %d.",
+                                os.path.basename(model_path), global_step)
+
+                # Start the queue runners.
+                sv.start_queue_runners(sess)
+
+                # Run evaluation on the latest checkpoint.
+                print("Extracting......")
+                num_eval_batches = int(
+                        math.ceil(float(test_size) / float(batch_size_per_gpu) * float(FLAGS.n_steps)))
+                assert (num_eval_batches*batch_size_per_gpu/FLAGS.n_steps) == test_size
+                correct = 0
+                count = 0
+                for i in xrange(num_eval_batches):
+                    test_start_time = time.time()
+                    ret, pre, name = sess.run([top_k_op, predicts, test_names])
+                    correct += np.sum(ret)
+                    for b in xrange(pre.shape[0]):
+                        fp = open('%s/%s'%(FLAGS.feature_dir, os.path.basename(name[b])), 'a')
+                        for f in xrange(pre.shape[1]):
+                            fp.write('%f '%pre[b, f])
+                        fp.write('\n')
+                        fp.close()
+                    test_duration = time.time() - test_start_time
+                    count += len(ret)
+                    cur_accuracy = float(correct)*100/count
+
+                    test_examples_per_sec = float(batch_size_per_gpu) / test_duration
+
+                    if i % 100 == 0:
+                        msg = '{:>6.2f}%, {:>6}/{:<6}'.format(cur_accuracy, count, test_size)
+                        format_str = ('%s: batch %d, accuracy=%s, (%.1f examples/sec; %.3f '
+                                'sec/batch)')
+                        print (format_str % (datetime.now(), i, msg,
+                                        test_examples_per_sec, test_duration))
+
+                msg = '{:>6.2f}%, {:>6}/{:<6}'.format(cur_accuracy, count, test_size)
+                format_str = ('%s: total batch %d, accuracy=%s, (%.1f examples/sec; %.3f '
+                        'sec/batch)')
+                print (format_str % (datetime.now(), num_eval_batches, msg,
+                                test_examples_per_sec, test_duration))
+
+
 def main(_):
     if not FLAGS.dataset_dir:
         raise ValueError('You must supply the dataset directory with --dataset_dir')
@@ -712,6 +856,8 @@ def main(_):
         train()
     elif FLAGS.mode == 'test':
         test()
+    else:
+        async_extract()
 
 
 if __name__ == '__main__':

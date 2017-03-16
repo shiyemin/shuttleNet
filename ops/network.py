@@ -1,6 +1,10 @@
 import tensorflow as tf
 from tensorflow.python.training import moving_averages
 
+try:
+    xrange
+except NameError:
+    xrange = range
 # Used to keep the update ops done by batch_norm.
 UPDATE_OPS_COLLECTION = tf.GraphKeys.UPDATE_OPS
 
@@ -74,7 +78,7 @@ class Network(object):
             try:
                 return self.layers[layer_name]
             except KeyError:
-                print self.layers.keys()
+                print(self.layers.keys())
                 raise KeyError('Unknown layer name fed: %s'%layer)
         else:
             return self.terminals[-1]
@@ -121,10 +125,10 @@ class Network(object):
             if group==1:
                 output = convolve(input, kernel)
             else:
-                input_groups = tf.split_v(input, group, 3)
-                kernel_groups = tf.split_v(kernel, group, 3)
+                input_groups = tf.split(input, group, 3)
+                kernel_groups = tf.split(kernel, group, 3)
                 output_groups = [convolve(i, k) for i,k in zip(input_groups, kernel_groups)]
-                output = tf.concat_v2(output_groups, 3)
+                output = tf.concat(output_groups, 3)
             if biased:
                 biases = self.make_var('biases', [c_o],
                                     initializer=tf.constant_initializer(0.0),
@@ -177,7 +181,7 @@ class Network(object):
 
     @layer
     def concat(self, inputs, axis, name):
-        return tf.concat_v2(values=inputs, axis=axis, name=name)
+        return tf.concat(values=inputs, axis=axis, name=name)
 
     @layer
     def add(self, inputs, name):
@@ -198,7 +202,7 @@ class Network(object):
                                  initializer=tf.ones_initializer(),
                                  trainable=self.trainable)
                 offset = self.make_var('offset', shape=shape,
-                                initializer=tf.zeros_initializer,
+                                initializer=tf.zeros_initializer(),
                                 trainable=self.trainable)
             else:
                 scale, offset = (None, None)
@@ -207,7 +211,7 @@ class Network(object):
             moving_collections = [moving_vars, tf.GraphKeys.MOVING_AVERAGE_VARIABLES]
             moving_mean = self.make_var('mean',
                                             shape,
-                                            initializer=tf.zeros_initializer,
+                                            initializer=tf.zeros_initializer(),
                                             trainable=False,
                                             collections=moving_collections)
             moving_variance = self.make_var('variance',

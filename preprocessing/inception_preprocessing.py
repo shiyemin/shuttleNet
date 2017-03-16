@@ -128,7 +128,7 @@ def preprocess_for_train(image, height, width,
     else:
       cast = tf.cast(image, tf.float32)
       scale = 1. / 255.
-      image = tf.mul(cast, scale)
+      image = tf.multiply(cast, scale)
 
     # This resizing operation may distort the images because the aspect
     # ratio is not respected. We select a resize method in a round robin
@@ -157,8 +157,8 @@ def preprocess_for_train(image, height, width,
 
     tf.summary.image('final_distorted_image',
                      tf.expand_dims(distorted_image, 0))
-    distorted_image = tf.sub(distorted_image, 0.5)
-    distorted_image = tf.mul(distorted_image, 2.0)
+    distorted_image = tf.subtract(distorted_image, 0.5)
+    distorted_image = tf.multiply(distorted_image, 2.0)
     return distorted_image
 
 
@@ -189,7 +189,7 @@ def preprocess_for_eval(image, height, width, scope=None):
     else:
       cast = tf.cast(image, tf.float32)
       scale = 1. / 255.
-      image = tf.mul(cast, scale)
+      image = tf.multiply(cast, scale)
 
     if height and width:
       # Resize the image to the specified height and width.
@@ -197,8 +197,8 @@ def preprocess_for_eval(image, height, width, scope=None):
       image = tf.image.resize_bilinear(image, [height, width],
                                        align_corners=False)
       image = tf.squeeze(image, [0])
-    image = tf.sub(image, 0.5)
-    image = tf.mul(image, 2.0)
+    image = tf.subtract(image, 0.5)
+    image = tf.multiply(image, 2.0)
     return image
 
 

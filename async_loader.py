@@ -8,6 +8,8 @@ from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 import numpy as np
 
+FLAGS = tf.app.flags.FLAGS
+
 def get_multi_scale_crop_size(height, width, crop_size, scale_ratios, max_distort):
     crop_sizes = []
     base_size = min(height, width)
@@ -60,7 +62,7 @@ def one_image(modality, image_name, offset_str, start_offset, height, width, cro
             file_contents = tf.read_file(image_name+"/flow_i_"+id+".jpg")
             image = tf.image.decode_jpeg(file_contents, channels=3)
             images.append(image)
-        image = tf.concat_v2(images, 2)
+        image = tf.concat(images, 2)
     elif modality == 'flow' or modality == 'warp':
         images = []
         for o in xrange(length):
@@ -73,11 +75,11 @@ def one_image(modality, image_name, offset_str, start_offset, height, width, cro
             image2 = tf.to_float(image2)
             if length <= 1:
                 image3 = 0.7064*tf.sqrt(image1*image1+image2*image2)
-                image = tf.concat_v2([image1, image2, image3], 2)
+                image = tf.concat([image1, image2, image3], 2)
             else:
-                image = tf.concat_v2([image1, image2], 2)
+                image = tf.concat([image1, image2], 2)
             images.append(image)
-        image = tf.concat_v2(images, 2)
+        image = tf.concat(images, 2)
         if length > 1:
             channels = 2 * length
     else:
@@ -167,6 +169,54 @@ def read_video(name_label_length_stride_queue, offset_str, multi_scale_crop_size
         images2 = tf.stack(images2)
     return images, images2, labels
 
+def read_fix_video(name_label_stride_setting_queue, offset_str, config):
+    # name: video name
+    # label: video label
+    # stride: read stride for current video
+    # offsets: video offset for samples
+    # hos: frame height offsets
+    # wos: frame width offsets
+    # mirrors: frame mirror (True or False)
+    # config:
+    #   width, height, crop_size, n_steps, modality
+    #   augment(True, False)
+    video_name = name_label_stride_setting_queue[0]
+    label = name_label_stride_setting_queue[1]
+    read_stride = name_label_stride_setting_queue[2]
+    offset = name_label_stride_setting_queue[3]
+    ho = name_label_stride_setting_queue[4]
+    wo = name_label_stride_setting_queue[5]
+    mirror = name_label_stride_setting_queue[6]
+
+    if config['merge_label']:
+        labels = label
+    else:
+        labels = tf.fill([config['n_steps']], label)
+
+    images = []
+    images2 = []
+    for i in xrange(config['n_steps']):
+        image = one_image(config['modality'], tf.add(config['data_path1'], video_name),
+                          offset_str, offset+tf.to_int32(tf.floor(i*read_stride)),
+                          config['height'], config['width'], 1,
+                          ho, wo, config['crop_size'], config['crop_size'], config['crop_size'],
+                          config['preprocessing_fn_1'], False, config['length1'])
+        image = tf.cond(mirror, lambda:tf.image.flip_left_right(image), lambda:image)
+        images.append(image)
+        if config['modality2'] is not None:
+            image = one_image(config['modality2'], tf.add(config['data_path2'], video_name),
+                            offset_str, offset+tf.to_int32(tf.floor(i*read_stride)),
+                            config['height'], config['width'], 1,
+                            ho, wo, config['crop_size'], config['crop_size'], config['crop_size'],
+                            config['preprocessing_fn_2'], False, config['length2'])
+            image = tf.cond(mirror, lambda:tf.image.flip_left_right(image), lambda:image)
+            images2.append(image)
+
+    images = tf.stack(images)
+    if config['modality2'] is not None:
+        images2 = tf.stack(images2)
+    return images, images2, labels
+
 
 def video_inputs(groundtruth_path, data_path1, scale_size, crop_size,
             batch_size, n_steps, modality, read_stride,
@@ -197,7 +247,10 @@ def video_inputs(groundtruth_path, data_path1, scale_size, crop_size,
         raise NotImplementedError('Ground truth file should contain one label.')
     print('%d samples in list.'%len(labels))
 
-    nums = [len(os.listdir(data_path1+p))/3-max(length1, length2)+1 for p in paths]
+    if modality == "warp":
+        nums = [len(os.listdir(data_path1+p))/2-max(length1, length2)+1 for p in paths]
+    else:
+        nums = [len(os.listdir(data_path1+p))/3-max(length1, length2)+1 for p in paths]
     remove_list = [i for i in xrange(len(nums)) if nums[i] <= 0]
     if len(remove_list) > 0:
         for i in xrange(len(remove_list)):
@@ -231,39 +284,37 @@ def video_inputs(groundtruth_path, data_path1, scale_size, crop_size,
 
     # Ensure that the random shuffling has good mixing properties.
     min_queue_examples = 64
+    num_preprocess_threads = 64
+    capacity = min_queue_examples + (num_preprocess_threads + 2) * int(batch_size/n_steps)
 
-    # Generate a batch of images and labels by building up a queue of examples.
-    # Create a queue that shuffles the examples, and then
-    # read 'batch_size' images + labels from the example queue.
-    num_preprocess_threads = 16
     if shuffle:
         if modality2 is None:
             images, label_batch, name = tf.train.shuffle_batch(
                 [image, label, filename_queue[0]],
                 batch_size=int(batch_size/n_steps),
                 num_threads=num_preprocess_threads,
-                capacity=min_queue_examples,
-                min_after_dequeue=int(min_queue_examples/2))
+                capacity=capacity,
+                min_after_dequeue=min_queue_examples)
         else:
             images, images2, label_batch, name = tf.train.shuffle_batch(
                 [image, image2, label, filename_queue[0]],
                 batch_size=int(batch_size/n_steps),
                 num_threads=num_preprocess_threads,
-                capacity=min_queue_examples,
-                min_after_dequeue=int(min_queue_examples/2))
+                capacity=capacity,
+                min_after_dequeue=min_queue_examples)
     else:
         if modality2 is None:
             images, label_batch, name = tf.train.batch(
                 [image, label, filename_queue[0]],
                 batch_size=int(batch_size/n_steps),
                 num_threads=num_preprocess_threads,
-                capacity=min_queue_examples)
+                capacity=capacity)
         else:
             images, images2, label_batch, name = tf.train.batch(
                 [image, image2, label, filename_queue[0]],
                 batch_size=int(batch_size/n_steps),
                 num_threads=num_preprocess_threads,
-                capacity=min_queue_examples)
+                capacity=capacity)
 
     imgs_shape = images.get_shape()
     if len(imgs_shape) == 5:
@@ -298,4 +349,146 @@ def video_inputs(groundtruth_path, data_path1, scale_size, crop_size,
 
         return dataset_size, images, images2, label_batch, name
 
+
+def multi_sample_video_inputs(groundtruth_path, data_path1, batch_size, n_steps,
+            modality, read_stride, scale_size, crop_size,
+            preprocessing_fn_1, preprocessing_fn_2=None,
+            data_path2="", modality2=None, sample_num=25,
+            length1=1, length2=1, label_from_one=False, merge_label=False):
+    data_path1 = data_path1 + '/'
+    data_path2 = data_path2 + '/'
+    config = {'width':scale_size, 'height':scale_size, 'crop_size':crop_size,
+              'n_steps':n_steps, 'modality':modality,
+              "data_path1":data_path1, "data_path2":data_path2,
+              'length1':length1, 'length2':length2,
+              'preprocessing_fn_1':preprocessing_fn_1, 'preprocessing_fn_2':preprocessing_fn_2,
+              'modality2':modality2, 'merge_label':merge_label}
+
+    gt_lines = open(groundtruth_path).readlines()
+    gt_pairs = [line.split() for line in gt_lines]
+    ori_paths = [p[0] for p in gt_pairs]
+    if len(gt_pairs[0]) == 2:
+        ori_labels = np.array([int(p[1]) for p in gt_pairs])
+        if label_from_one:
+            ori_labels -= 1
+    else:
+        raise NotImplementedError('Ground truth file should contain one label.')
+    print('%d videos in list.'%len(ori_labels))
+
+    if modality == "warp":
+        ori_nums = [len(os.listdir(data_path1+p))/2-max(length1, length2)+1 for p in ori_paths]
+    else:
+        ori_nums = [len(os.listdir(data_path1+p))/3-max(length1, length2)+1 for p in ori_paths]
+    remove_list = [i for i in xrange(len(ori_nums)) if ori_nums[i] <= 0]
+    if len(remove_list) > 0:
+        for i in xrange(len(remove_list)):
+            print("Removing %s"%(ori_paths[remove_list[i]]))
+        ori_paths = [p for i,p in enumerate(ori_paths) if i not in remove_list]
+        ori_labels = [l for i,l in enumerate(ori_labels) if i not in remove_list]
+        ori_nums = [int(n) for i,n in enumerate(ori_nums) if i not in remove_list]
+    ori_read_strides = [min(read_stride,float(n)/n_steps) for n in ori_nums]
+    # trancate sample lenth
+    ori_nums = [float(n-ori_read_strides[i]*n_steps+ori_read_strides[i]) for i,n in enumerate(ori_nums)]
+
+    offset_str = ["%04d"%i for i in xrange(1,9999)]
+
+    # generate multi sample
+    paths = []
+    labels = []
+    read_strides = []
+    offsets = []
+    hos = []
+    wos = []
+    mirrors = []
+    crop_off = (scale_size - crop_size) / 2
+    crop_pos = [[0, 0],
+                [0, int(2*crop_off)],
+                [int(crop_off), int(crop_off)],
+                [int(2*crop_off), 0],
+                [int(2*crop_off), int(2*crop_off)]]
+    for i in xrange(len(ori_labels)):
+        if ori_nums[i] > sample_num:
+            mov_stride = ori_nums[i]/sample_num
+            num_s = int(sample_num)
+        else:
+            mov_stride = 1.
+            num_s = int(ori_nums[i])
+        assert num_s > 0
+        for s in xrange(num_s):
+            # 4 corners and center and their flips
+            for j in xrange(10):
+                paths.append(ori_paths[i])
+                labels.append(ori_labels[i])
+                read_strides.append(ori_read_strides[i])
+                offsets.append(int(mov_stride*s))
+                hos.append(crop_pos[j%len(crop_pos)][0])
+                wos.append(crop_pos[j%len(crop_pos)][1])
+                if j >= len(crop_pos):
+                    mirrors.append(True)
+                else:
+                    mirrors.append(False)
+
+    dataset_size = len(labels)
+    print("%d samples in total."%dataset_size)
+
+    paths = tf.convert_to_tensor(paths, dtype=tf.string)
+    labels = tf.convert_to_tensor(labels, dtype=tf.int32)
+    read_strides = tf.convert_to_tensor(read_strides, dtype=tf.float32)
+    offsets = tf.convert_to_tensor(offsets, dtype=tf.int32)
+    hos = tf.convert_to_tensor(hos, dtype=tf.int32)
+    wos = tf.convert_to_tensor(wos, dtype=tf.int32)
+    mirrors = tf.convert_to_tensor(mirrors, dtype=tf.bool)
+
+    offset_str = tf.convert_to_tensor(offset_str, dtype=tf.string)
+
+    # Create a queue that produces the filenames to read.
+    filename_queue = tf.train.slice_input_producer([paths, labels, read_strides, offsets, hos, wos, mirrors],
+                                                    num_epochs=1,
+                                                    shuffle=False)
+    # Read examples from files in the filename queue.
+    image, image2, label = read_fix_video(filename_queue, offset_str, config)
+
+    # Ensure that the random shuffling has good mixing properties.
+    min_queue_examples = 64
+    num_preprocess_threads = 16
+    capacity = min_queue_examples + (num_preprocess_threads + 2) * int(batch_size/n_steps)
+
+    if modality2 is None:
+        images, label_batch, name = tf.train.batch(
+            [image, label, filename_queue[0]],
+            batch_size=int(batch_size/n_steps),
+            num_threads=num_preprocess_threads,
+            capacity=capacity)
+    else:
+        images, images2, label_batch, name = tf.train.batch(
+            [image, image2, label, filename_queue[0]],
+            batch_size=int(batch_size/n_steps),
+            num_threads=num_preprocess_threads,
+            capacity=capacity)
+
+    imgs_shape = images.get_shape()
+    if len(imgs_shape) == 5:
+        images = tf.transpose(images, [1,0,2,3,4])
+        images = tf.reshape(images, [batch_size, imgs_shape[2].value, imgs_shape[3].value, imgs_shape[4].value])
+        if not merge_label:
+            label_batch = tf.transpose(label_batch, [1,0])
+    else:
+        raise NotImplementedError("Images shape length is %d"%len(imgs_shape))
+    if merge_label:
+        video_num = int(batch_size/n_steps)
+        label_batch = tf.reshape(label_batch, [video_num])
+    else:
+        label_batch = tf.reshape(label_batch, [batch_size])
+
+    if modality2 is None:
+        return dataset_size, images, label_batch, name
+    else:
+        imgs_shape = images2.get_shape()
+        if len(imgs_shape) == 5:
+            images2 = tf.transpose(images2, [1,0,2,3,4])
+            images2 = tf.reshape(images2, [batch_size, imgs_shape[2].value, imgs_shape[3].value, imgs_shape[4].value])
+        else:
+            raise NotImplementedError("Images shape length is %d"%len(imgs_shape))
+
+        return dataset_size, images, images2, label_batch, name
 

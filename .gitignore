@@ -6,4 +6,5 @@ ops/*.pyc
 ops/*.o
 ops/*.so
 preprocessing/*.pyc
+scripts
 models

@@ -7,6 +7,10 @@
 Because that we are still tuning the model, the parameters are not exactly the same as our paper's
 setting. But you should still be able to reproduce the experiments.
 
+Training shuttleNet with GoogLeNet model needs 1-2 GPUs. However, it's recommended to have at least 4 GPUs to train shuttleNet with Inception-ResNet-v2 model.
+
+The model used in our paper will be released soon. You can also ask for them before we actually make it available.
+
 ## Requirements
 * Tensorflow (see tensorflow.org for installation instructions)
 

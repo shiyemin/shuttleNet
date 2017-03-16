@@ -6,6 +6,10 @@ import tensorflow as tf
 import numpy as np
 from ops.network import networks_list
 
+try:
+    xrange
+except NameError:
+    xrange = range
 slim = tf.contrib.slim
 tf.app.flags.DEFINE_float('power', 1.0, 'The power parameter for polynomial decay.')
 FLAGS = tf.app.flags.FLAGS
@@ -45,7 +49,10 @@ def _configure_learning_rate(global_step):
         if isinstance(decay_steps, int):
             decay_steps = [decay_steps*i for i in xrange(1, 6)]
         decay_steps = [np.int64(i) for i in decay_steps]
-        lr_values = [FLAGS.learning_rate*FLAGS.learning_rate_decay_factor**i for i in xrange(len(decay_steps)+1)]
+        if FLAGS.learning_rate >= 0.000001:
+            lr_values = [FLAGS.learning_rate*FLAGS.learning_rate_decay_factor**i for i in xrange(len(decay_steps)+1)]
+        else:
+            lr_values = eval(FLAGS.learning_rate_steps)
         return tf.train.piecewise_constant(
                                         global_step,
                                         decay_steps,
@@ -204,6 +211,10 @@ def _get_variables_to_restore():
     if FLAGS.checkpoint_exclude_scopes:
         exclusions = [scope.strip()
                     for scope in FLAGS.checkpoint_exclude_scopes.split(',')]
+    end_exclusions = []
+    if FLAGS.checkpoint_exclude_end_scopes:
+        end_exclusions = [scope.strip()
+                    for scope in FLAGS.checkpoint_exclude_end_scopes.split(',')]
 
     # TODO(sguada) variables.filter_variables()
     variables_to_restore = []
@@ -213,6 +224,11 @@ def _get_variables_to_restore():
             if var.op.name.startswith(exclusion):
                 excluded = True
                 break
+        if not excluded:
+            for exclusion in end_exclusions:
+                if var.op.name.endswith(exclusion):
+                    excluded = True
+                    break
         if not excluded:
             if FLAGS.no_decay:
                 print('Will restore %s'%(var.op.name))

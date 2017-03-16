@@ -229,7 +229,7 @@ def googlenet_rnn(images, num_classes=101, is_training=True,
     network = GoogleNet({'data':images}, trainable=is_training)
     net = network.get_output()
 
-    with tf.variable_scope('shuttleNet'):
+    with tf.variable_scope('echoNet'):
         net = slim.flatten(net)
         end_points['Flatten'] = net
 

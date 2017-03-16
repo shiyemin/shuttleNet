@@ -27,14 +27,10 @@ from __future__ import print_function
 
 import tensorflow as tf
 from ops import fops
+from ops import ops as myops
 
 slim = tf.contrib.slim
 
-tf.app.flags.DEFINE_string(
-    'rnn', 'shuttleNet', 'The list of the dataset to load.')
-tf.app.flags.DEFINE_integer(
-    'num_rnn', 1,
-    'The Number of rnn layers.')
 FLAGS = tf.app.flags.FLAGS
 
 
@@ -50,7 +46,7 @@ def block35(net, scale=1.0, activation_fn=tf.nn.relu, scope=None, reuse=None):
       tower_conv2_0 = slim.conv2d(net, 32, 1, scope='Conv2d_0a_1x1')
       tower_conv2_1 = slim.conv2d(tower_conv2_0, 48, 3, scope='Conv2d_0b_3x3')
       tower_conv2_2 = slim.conv2d(tower_conv2_1, 64, 3, scope='Conv2d_0c_3x3')
-    mixed = tf.concat_v2([tower_conv, tower_conv1_1, tower_conv2_2], 3)
+    mixed = tf.concat([tower_conv, tower_conv1_1, tower_conv2_2], 3)
     up = slim.conv2d(mixed, net.get_shape()[3], 1, normalizer_fn=None,
                      activation_fn=None, scope='Conv2d_1x1')
     net += scale * up
@@ -70,7 +66,7 @@ def block17(net, scale=1.0, activation_fn=tf.nn.relu, scope=None, reuse=None):
                                   scope='Conv2d_0b_1x7')
       tower_conv1_2 = slim.conv2d(tower_conv1_1, 192, [7, 1],
                                   scope='Conv2d_0c_7x1')
-    mixed = tf.concat_v2([tower_conv, tower_conv1_2], 3)
+    mixed = tf.concat([tower_conv, tower_conv1_2], 3)
     up = slim.conv2d(mixed, net.get_shape()[3], 1, normalizer_fn=None,
                      activation_fn=None, scope='Conv2d_1x1')
     net += scale * up
@@ -90,7 +86,7 @@ def block8(net, scale=1.0, activation_fn=tf.nn.relu, scope=None, reuse=None):
                                   scope='Conv2d_0b_1x3')
       tower_conv1_2 = slim.conv2d(tower_conv1_1, 256, [3, 1],
                                   scope='Conv2d_0c_3x1')
-    mixed = tf.concat_v2([tower_conv, tower_conv1_2], 3)
+    mixed = tf.concat([tower_conv, tower_conv1_2], 3)
     up = slim.conv2d(mixed, net.get_shape()[3], 1, normalizer_fn=None,
                      activation_fn=None, scope='Conv2d_1x1')
     net += scale * up
@@ -121,7 +117,7 @@ def inception_resnet_v2_rnn(inputs, num_classes=1001, is_training=True,
   end_points = {}
 
   with tf.variable_scope(scope, 'InceptionResnetV2', [inputs], reuse=reuse):
-    with slim.arg_scope([slim.batch_norm, slim.dropout],
+    with slim.arg_scope([myops.fused_batch_norm, slim.dropout],
                         is_training=is_training):
       with slim.arg_scope([slim.conv2d, slim.max_pool2d, slim.avg_pool2d],
                           stride=1, padding='SAME'):
@@ -173,7 +169,7 @@ def inception_resnet_v2_rnn(inputs, num_classes=1001, is_training=True,
                                          scope='AvgPool_0a_3x3')
             tower_pool_1 = slim.conv2d(tower_pool, 64, 1,
                                        scope='Conv2d_0b_1x1')
-          net = tf.concat_v2([tower_conv, tower_conv1_1,
+          net = tf.concat([tower_conv, tower_conv1_1,
                               tower_conv2_2, tower_pool_1], 3)
 
         end_points['Mixed_5b'] = net
@@ -194,7 +190,7 @@ def inception_resnet_v2_rnn(inputs, num_classes=1001, is_training=True,
           with tf.variable_scope('Branch_2'):
             tower_pool = slim.max_pool2d(net, 3, stride=2, padding='VALID',
                                          scope='MaxPool_1a_3x3')
-          net = tf.concat_v2([tower_conv, tower_conv1_2, tower_pool], 3)
+          net = tf.concat([tower_conv, tower_conv1_2, tower_pool], 3)
 
         end_points['Mixed_6a'] = net
         net = slim.repeat(net, 20, block17, scale=0.10)
@@ -205,7 +201,7 @@ def inception_resnet_v2_rnn(inputs, num_classes=1001, is_training=True,
                                 scope='Conv2d_1a_3x3')
           aux = slim.conv2d(aux, 128, 1, scope='Conv2d_1b_1x1')
           aux = slim.conv2d(aux, 768, aux.get_shape()[1:3],
-                            padding='VALID', scope='Logits_Conv2d_2a_5x5')
+                            padding='VALID', scope='Conv2d_2a_5x5')
           aux = slim.flatten(aux)
           aux = slim.fully_connected(aux, num_classes, activation_fn=None,
                                      normalizer_fn=None,
@@ -231,7 +227,7 @@ def inception_resnet_v2_rnn(inputs, num_classes=1001, is_training=True,
           with tf.variable_scope('Branch_3'):
             tower_pool = slim.max_pool2d(net, 3, stride=2, padding='VALID',
                                          scope='MaxPool_1a_3x3')
-          net = tf.concat_v2([tower_conv_1, tower_conv1_1,
+          net = tf.concat([tower_conv_1, tower_conv1_1,
                               tower_conv2_2, tower_pool], 3)
 
         end_points['Mixed_7a'] = net
@@ -252,7 +248,7 @@ def inception_resnet_v2_rnn(inputs, num_classes=1001, is_training=True,
           net = slim.dropout(net, dropout_keep_prob, is_training=is_training,
                              scope='Dropout')
           net = slim.fully_connected(net, 1024,
-                                       scope='shuttleNet_input_projection')
+                                       scope='echoNet_input_projection')
           end_points['EchonetInput_proj'] = net
 
     return net, end_points
@@ -265,7 +261,7 @@ def rnn_part(inputs, num_classes=1001, is_training=True,
   end_points = {}
 
   with tf.variable_scope(scope, 'InceptionResnetV2', [inputs], reuse=reuse):
-    with slim.arg_scope([slim.batch_norm, slim.dropout],
+    with slim.arg_scope([myops.fused_batch_norm, slim.dropout],
                         is_training=is_training):
       with slim.arg_scope([slim.conv2d, slim.max_pool2d, slim.avg_pool2d],
                           stride=1, padding='SAME'):
@@ -274,7 +270,7 @@ def rnn_part(inputs, num_classes=1001, is_training=True,
             rnn_scope = '%s_%d'%(FLAGS.rnn, i) if FLAGS.num_rnn > 1 else FLAGS.rnn
             if FLAGS.rnn == 'shuttleNet':
               net = fops.shuttleNet(inputs, FLAGS.n_steps, 2, 1024, 2,
-                                echocell="GRU",
+                                echocell=FLAGS.echocell,
                                 scope=rnn_scope)
             else:
               net = fops.lstm(inputs, FLAGS.n_steps, 1024,
@@ -282,8 +278,12 @@ def rnn_part(inputs, num_classes=1001, is_training=True,
                             lstm_type=FLAGS.rnn,
                             scope=rnn_scope)
             inputs = net
-
           end_points['EchoNet'] = net
+
+          #  net = slim.dropout(net, dropout_keep_prob, is_training=is_training,
+                             #  scope='Dropout')
+          #  end_points['Dropout'] = net
+
           logits = slim.fully_connected(net, num_classes, activation_fn=None,
                                         normalizer_fn=None,
                                         normalizer_params=None,
@@ -322,6 +322,6 @@ def inception_resnet_v2_rnn_arg_scope(weight_decay=0.00004,
     }
     # Set activation_fn and parameters for batch_norm.
     with slim.arg_scope([slim.conv2d, slim.fully_connected], activation_fn=tf.nn.relu,
-                        normalizer_fn=slim.batch_norm,
+                        normalizer_fn=myops.fused_batch_norm,
                         normalizer_params=batch_norm_params) as scope:
       return scope
